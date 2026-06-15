@@ -369,7 +369,7 @@ Contexto do livro atual:
       if (!response.ok) {
         throw new Error(data.error || "Erro na API");
       }
-      const text = data.content?.map(i => i.text || "").join("\n") || "Desculpe, não consegui responder.";
+      const text = data.text || "Desculpe, não consegui responder.";
       setAiChat(prev => [...prev, { role: "assistant", content: text }]);
     } catch (err) {
       setAiChat(prev => [...prev, { role: "assistant", content: `Erro ao conectar com a Musa: ${err.message}` }]);
