@@ -355,7 +355,7 @@ Contexto do livro atual:
 - Meta: ${activeBook.targetWordCount} palavras` : "Nenhum livro selecionado."}`;
 
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("/api/muse", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -366,10 +366,13 @@ Contexto do livro atual:
         })
       });
       const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Erro na API");
+      }
       const text = data.content?.map(i => i.text || "").join("\n") || "Desculpe, não consegui responder.";
       setAiChat(prev => [...prev, { role: "assistant", content: text }]);
-    } catch {
-      setAiChat(prev => [...prev, { role: "assistant", content: "Erro ao conectar com a IA. Verifique sua conexão." }]);
+    } catch (err) {
+      setAiChat(prev => [...prev, { role: "assistant", content: `Erro ao conectar com a Musa: ${err.message}` }]);
     }
     setAiLoading(false);
   };
