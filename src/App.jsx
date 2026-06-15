@@ -158,6 +158,8 @@ export default function RomanceWriterStudio() {
   const [editingScene, setEditingScene] = useState(null);
   const [editingChar, setEditingChar] = useState(null);
   const [freeWriteText, setFreeWriteText] = useState("");
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [appInstalled, setAppInstalled] = useState(false);
 
   const timerRef = useRef(null);
   const chatEndRef = useRef(null);
@@ -165,6 +167,25 @@ export default function RomanceWriterStudio() {
   const pendingSyncRef = useRef(new Set());
 
   const activeBook = books.find(b => b.id === activeBookId) || null;
+
+  // — PWA install prompt —
+  useEffect(() => {
+    const handler = (e) => { e.preventDefault(); setInstallPrompt(e); };
+    const installed = () => setAppInstalled(true);
+    window.addEventListener("beforeinstallprompt", handler);
+    window.addEventListener("appinstalled", installed);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handler);
+      window.removeEventListener("appinstalled", installed);
+    };
+  }, []);
+
+  const handleInstall = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === "accepted") { setAppInstalled(true); setInstallPrompt(null); }
+  };
 
   // — Auth init —
   useEffect(() => {
@@ -1531,6 +1552,20 @@ Contexto do livro atual:
             ))}
           </nav>
           <div className="sidebar-footer">
+            {installPrompt && !appInstalled && (
+              <button
+                onClick={handleInstall}
+                style={{
+                  width: "100%", marginBottom: 10, padding: "10px 12px",
+                  background: "linear-gradient(135deg, #c9a96e, #e8c98a)",
+                  color: "#1a0a2e", border: "none", borderRadius: 10,
+                  fontSize: 13, fontWeight: 700, cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                }}
+              >
+                📲 Instalar App
+              </button>
+            )}
             {user && (
               <div style={{ padding: "8px 12px", marginBottom: 8, background: "rgba(201,169,110,0.08)", borderRadius: 10, fontSize: 11 }}>
                 <div style={{ color: "var(--text3)", marginBottom: 4 }}>
