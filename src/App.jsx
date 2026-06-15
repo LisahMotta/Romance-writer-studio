@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { supabase } from "./supabase";
+import AuthScreen from "./AuthScreen";
 
 const STORAGE_KEY = "romance-writer-studio";
 
-// — Persistence —
+// — Local Persistence (offline fallback) —
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -11,6 +13,33 @@ function loadState() {
 }
 function saveState(state) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+}
+
+// — Supabase helpers —
+async function fetchBooksFromDB(userId) {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from("books")
+    .select("id, data")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
+  if (error) { console.error("Erro ao carregar livros:", error); return null; }
+  return data.map(row => row.data);
+}
+
+async function upsertBookToDB(book, userId) {
+  if (!supabase) return;
+  await supabase.from("books").upsert({
+    id: book.id,
+    user_id: userId,
+    data: book,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "id" });
+}
+
+async function deleteBookFromDB(bookId) {
+  if (!supabase) return;
+  await supabase.from("books").delete().eq("id", bookId);
 }
 
 // — Data Templates —
@@ -111,6 +140,8 @@ const CopyIcon = (p) => <Icon {...p} d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12
 // ─── Main App ───
 export default function RomanceWriterStudio() {
   const saved = loadState();
+  const [user, setUser] = useState(undefined); // undefined = loading, null = not logged in
+  const [syncStatus, setSyncStatus] = useState(""); // "", "syncing", "synced", "error"
   const [books, setBooks] = useState(saved?.books || []);
   const [activeBookId, setActiveBookId] = useState(saved?.activeBookId || null);
   const [activeTab, setActiveTab] = useState(saved?.activeTab || "dashboard");
@@ -130,13 +161,85 @@ export default function RomanceWriterStudio() {
 
   const timerRef = useRef(null);
   const chatEndRef = useRef(null);
+  const syncTimeoutRef = useRef(null);
+  const pendingSyncRef = useRef(new Set());
 
   const activeBook = books.find(b => b.id === activeBookId) || null;
 
-  // Persist
+  // — Auth init —
+  useEffect(() => {
+    if (!supabase) { setUser(null); return; }
+
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session?.user) {
+        await loadUserBooks(session.user);
+      } else {
+        setUser(null);
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === "SIGNED_OUT") {
+        setUser(null);
+        setBooks(loadState()?.books || []);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const loadUserBooks = async (authUser) => {
+    setSyncStatus("syncing");
+    const remoteBooks = await fetchBooksFromDB(authUser.id);
+    if (remoteBooks !== null) {
+      // Merge: migrate any local books not yet in the cloud
+      const local = loadState()?.books || [];
+      const remoteIds = new Set(remoteBooks.map(b => b.id));
+      const toMigrate = local.filter(b => !remoteIds.has(b.id));
+
+      const merged = [...remoteBooks, ...toMigrate];
+      if (toMigrate.length > 0) {
+        await Promise.all(toMigrate.map(b => upsertBookToDB(b, authUser.id)));
+      }
+
+      setBooks(merged);
+      saveState({ books: merged, activeBookId: null, activeTab: "dashboard" });
+    }
+    setUser(authUser);
+    setSyncStatus("synced");
+    setTimeout(() => setSyncStatus(""), 2000);
+  };
+
+  const handleSignOut = async () => {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    notify("Sessão encerrada");
+  };
+
+  // — Persist locally always —
   useEffect(() => {
     saveState({ books, activeBookId, activeTab });
   }, [books, activeBookId, activeTab]);
+
+  // — Debounced cloud sync for changed books —
+  const scheduleSyncBook = useCallback((bookId) => {
+    if (!supabase || !user) return;
+    pendingSyncRef.current.add(bookId);
+    clearTimeout(syncTimeoutRef.current);
+    setSyncStatus("syncing");
+    syncTimeoutRef.current = setTimeout(async () => {
+      const ids = [...pendingSyncRef.current];
+      pendingSyncRef.current.clear();
+      setBooks(current => {
+        ids.forEach(id => {
+          const book = current.find(b => b.id === id);
+          if (book) upsertBookToDB(book, user.id);
+        });
+        return current;
+      });
+      setSyncStatus("synced");
+      setTimeout(() => setSyncStatus(""), 2000);
+    }, 1500);
+  }, [user]);
 
   // Timer
   useEffect(() => {
@@ -156,22 +259,29 @@ export default function RomanceWriterStudio() {
   const notify = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2500); };
 
   const updateBook = useCallback((bookId, updater) => {
-    setBooks(prev => prev.map(b => b.id === bookId ? { ...updater(b), updatedAt: new Date().toISOString() } : b));
-  }, []);
+    setBooks(prev => prev.map(b => {
+      if (b.id !== bookId) return b;
+      const updated = { ...updater(b), updatedAt: new Date().toISOString() };
+      scheduleSyncBook(bookId);
+      return updated;
+    }));
+  }, [scheduleSyncBook]);
 
   // — Book CRUD —
-  const createBook = () => {
+  const createBook = async () => {
     const book = { ...BOOK_TEMPLATE, id: uid(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), title: "Novo Romance" };
     setBooks(prev => [...prev, book]);
     setActiveBookId(book.id);
     setActiveTab("overview");
-    notify("Novo livro criado!");
+    if (supabase && user) await upsertBookToDB(book, user.id);
+    notify("Novo romance criado!");
   };
 
-  const deleteBook = (id) => {
+  const deleteBook = async (id) => {
     if (!confirm("Excluir este livro permanentemente?")) return;
     setBooks(prev => prev.filter(b => b.id !== id));
     if (activeBookId === id) { setActiveBookId(null); setActiveTab("dashboard"); }
+    if (supabase && user) await deleteBookFromDB(id);
     notify("Livro excluído");
   };
 
@@ -1375,6 +1485,27 @@ Contexto do livro atual:
     }
   };
 
+  // — Auth gate —
+  if (user === undefined) {
+    return (
+      <>
+        <style>{CSS}</style>
+        <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg, #1a0a2e 0%, #2d1052 50%, #1a0a2e 100%)" }}>
+          <div style={{ color: "#c9a96e", fontFamily: "Georgia, serif", fontSize: 18 }}>Carregando...</div>
+        </div>
+      </>
+    );
+  }
+
+  if (supabase && user === null) {
+    return (
+      <>
+        <style>{CSS}</style>
+        <AuthScreen onAuth={async (authUser) => { await loadUserBooks(authUser); }} />
+      </>
+    );
+  }
+
   return (
     <>
       <style>{CSS}</style>
@@ -1397,6 +1528,25 @@ Contexto do livro atual:
             ))}
           </nav>
           <div className="sidebar-footer">
+            {user && (
+              <div style={{ padding: "8px 12px", marginBottom: 8, background: "rgba(201,169,110,0.08)", borderRadius: 10, fontSize: 11 }}>
+                <div style={{ color: "var(--text3)", marginBottom: 4 }}>
+                  {syncStatus === "syncing" && "☁ Sincronizando..."}
+                  {syncStatus === "synced" && "✓ Salvo na nuvem"}
+                  {syncStatus === "" && "☁ Sincronizado"}
+                  {syncStatus === "error" && "⚠ Erro ao sincronizar"}
+                </div>
+                <div style={{ color: "var(--text3)", fontSize: 10, marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {user.email}
+                </div>
+                <button
+                  onClick={handleSignOut}
+                  style={{ background: "none", border: "1px solid rgba(201,169,110,0.3)", borderRadius: 6, color: "var(--text3)", fontSize: 11, padding: "3px 10px", cursor: "pointer", width: "100%" }}
+                >
+                  Sair
+                </button>
+              </div>
+            )}
             <div className="timer-widget">
               <div style={{ fontSize: 11, color: "var(--text3)", textAlign: "center", marginBottom: 4 }}>TIMER DE ESCRITA</div>
               <div className="timer-display">{fmtTime(writingTimer)}</div>
