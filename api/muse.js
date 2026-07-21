@@ -10,7 +10,6 @@ export default async function handler(req, res) {
 
   const { system, messages } = req.body;
 
-  // Converte formato Anthropic → Gemini
   const contents = messages.map(m => ({
     role: m.role === "assistant" ? "model" : "user",
     parts: [{ text: m.content }],
@@ -24,7 +23,7 @@ export default async function handler(req, res) {
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -35,7 +34,13 @@ export default async function handler(req, res) {
     const data = await response.json();
 
     if (!response.ok) {
-      return res.status(response.status).json({ error: data.error?.message || "Erro na API Gemini" });
+      const msg = data.error?.message || "Erro na API Gemini";
+      // Extrai tempo de retry se disponível
+      const retryMatch = msg.match(/retry in ([\d.]+)s/);
+      const retryMsg = retryMatch
+        ? `Muitas perguntas em pouco tempo. Aguarde ${Math.ceil(parseFloat(retryMatch[1]))} segundos e tente de novo.`
+        : msg;
+      return res.status(response.status).json({ error: retryMsg });
     }
 
     const text = data.candidates?.[0]?.content?.parts?.map(p => p.text).join("\n") || "Desculpe, não consegui responder.";

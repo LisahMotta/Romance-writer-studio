@@ -160,6 +160,9 @@ export default function RomanceWriterStudio() {
   const [freeWriteText, setFreeWriteText] = useState("");
   const [installPrompt, setInstallPrompt] = useState(null);
   const [appInstalled, setAppInstalled] = useState(false);
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone;
 
   const timerRef = useRef(null);
   const chatEndRef = useRef(null);
@@ -1552,9 +1555,9 @@ Contexto do livro atual:
             ))}
           </nav>
           <div className="sidebar-footer">
-            {installPrompt && !appInstalled && (
+            {!isStandalone && !appInstalled && (
               <button
-                onClick={handleInstall}
+                onClick={installPrompt ? handleInstall : () => setShowInstallGuide(true)}
                 style={{
                   width: "100%", marginBottom: 10, padding: "10px 12px",
                   background: "linear-gradient(135deg, #c9a96e, #e8c98a)",
@@ -1628,6 +1631,34 @@ Contexto do livro atual:
                 }}>Usar na Escrita</button>
                 <button className="btn btn-ghost" onClick={() => setShowPrompt(false)}><XIcon size={14}/></button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {showInstallGuide && (
+          <div className="prompt-overlay" onClick={() => setShowInstallGuide(false)}>
+            <div className="prompt-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 360 }}>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>📲</div>
+              <h3 style={{ fontFamily: "var(--serif)", color: "var(--gold)", marginBottom: 16 }}>Instalar o App</h3>
+              {isIOS ? (
+                <div style={{ fontSize: 14, color: "var(--text2)", lineHeight: 1.7, textAlign: "left" }}>
+                  <p style={{ marginBottom: 8 }}><strong>No Safari (iPhone/iPad):</strong></p>
+                  <p>1. Toque no ícone <strong>Compartilhar</strong> (quadrado com seta ↑) na barra inferior</p>
+                  <p>2. Role e toque em <strong>"Adicionar à Tela de Início"</strong></p>
+                  <p>3. Toque em <strong>Adicionar</strong></p>
+                </div>
+              ) : (
+                <div style={{ fontSize: 14, color: "var(--text2)", lineHeight: 1.7, textAlign: "left" }}>
+                  <p style={{ marginBottom: 8 }}><strong>No Chrome / Edge:</strong></p>
+                  <p>1. Clique no ícone <strong>⊕</strong> ou na estrela na barra de endereço</p>
+                  <p>2. Clique em <strong>"Instalar"</strong> ou <strong>"Adicionar à área de trabalho"</strong></p>
+                  <p style={{ marginTop: 12, marginBottom: 4 }}><strong>Ou:</strong></p>
+                  <p>Menu <strong>⋮ → Salvar e compartilhar → Instalar página como app</strong></p>
+                </div>
+              )}
+              <button className="btn btn-primary" style={{ marginTop: 20, width: "100%" }} onClick={() => setShowInstallGuide(false)}>
+                Entendi
+              </button>
             </div>
           </div>
         )}
